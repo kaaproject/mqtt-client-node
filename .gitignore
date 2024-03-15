@@ -1,0 +1,27 @@
+.aider*
+# Node modules and dependencies
+node_modules/
+
+# Distribution / build directory
+dist/
+build/
+
+# Environment configuration files
+.env
+.env.local
+.env.*.local
+
+# Misc
+*.log
+*.pid
+*.pid.lock
+*.seed
+*.sublime-project
+*.sublime-workspace
+*.swp
+*.swo
+*.lock
+*.DS_Store
+*.tgz
+*.zip
+*.vscode
