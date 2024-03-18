@@ -1,5 +1,7 @@
 # KaaIoT Mqtt Client
 
+Comprehensive MQTT client tailored for the Kaa IoT platform, providing a range of methods to interact with the platform's features. It encapsulates the complexity of MQTT communication, offering a user-friendly interface for IoT applications.
+
 This client works in Node.js environment. Requires Node.js 16+. Based on [MQTT.js](https://www.npmjs.com/package/mqtt) library.
 
 ## Installation
@@ -114,3 +116,25 @@ client.getSoftwareUpdate((softwareInfo) => {
   console.log('Software update info:', softwareInfo);
 });
 ```
+
+### `disconnect(callback?: mqtt.DoneCallback): void`
+Safely unsubscribe from all subscriptions and clear the subscriptions record. This method should be called before shutting down the application to ensure a clean disconnect.
+```js
+client.disconnect(() => {
+  console.log('Client destroyed and all subscriptions are cleared');
+});
+```
+
+### `connect(): void`
+Establishes a connection to the MQTT broker. This method should be called if the `manualConnect` option is set to `true` in the client options.
+```js
+// When manualConnect is true, you need to pass it in the mqttClientOptions and call connect manually
+const client = createKaaMqttClient(
+  { appVersionName: '1.0', token: 'your-token', connectionUrl: 'mqtt://mqtt.cloud.kaaiot.com:1883' },
+  { manualConnect: true }
+);
+
+// Connect to the MQTT broker
+client.connect();
+```
+

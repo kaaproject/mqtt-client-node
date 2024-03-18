@@ -24,6 +24,10 @@ export class KaaMqttClient {
   private client: mqtt.MqttClient;
   private appVersionName: string;
   private token: string;
+  private subscriptions: Record<
+    string,
+    { callback?: ResponseCallback<any>; errorCallback?: ErrorCallback }
+  > = {};
 
   constructor(
     private clientOptions: MQTTClientOptions,
@@ -39,6 +43,24 @@ export class KaaMqttClient {
     });
     this.appVersionName = appVersionName;
     this.token = token;
+    this.client.on('message', this.handleMessage.bind(this));
+  }
+
+  private handleMessage(topic: string, messageBuffer: Buffer): void {
+    const message = messageBuffer.toString();
+    Object.keys(this.subscriptions).forEach((baseTopic) => {
+      if (topic.startsWith(baseTopic)) {
+        this.debugLog('[MESSAGE] Handling message for topic', topic);
+        const { callback, errorCallback } = this.subscriptions[baseTopic];
+        if (topic.endsWith('/status') && callback) {
+          const payload = safeJson(message);
+          callback(payload, topic);
+        } else if (topic.endsWith('/error') && errorCallback) {
+          const error = safeJson<ErrorResponse>(message) as ErrorResponse;
+          errorCallback(error, topic);
+        }
+      }
+    });
   }
 
   private debugLog(...args: any[]) {
@@ -68,25 +90,25 @@ export class KaaMqttClient {
     callback?: ResponseCallback<R>,
     errorCallback?: ErrorCallback,
   ): void {
-    this.client.subscribe(`${baseTopic}/+`);
-    this.debugLog('[REQUEST SUB] Subscribed to', `${baseTopic}/+`);
+    if (!callback && !errorCallback) {
+      return;
+    }
 
-    const messageHandler = async (topic: string, messageBufer: Buffer) => {
-      if (!topic.startsWith(baseTopic)) {
-        return;
+    this.subscriptions[baseTopic] = { callback, errorCallback };
+    this.client.subscribe(`${baseTopic}/+`, (err, granted) => {
+      if (err) {
+        this.debugLog('[SUBSCRIBE] Error subscribing to topic', baseTopic, err);
+        errorCallback &&
+          errorCallback(
+            { reasonPhrase: err.message, statusCode: 500 },
+            baseTopic,
+          );
+      } else {
+        if (granted && granted[0]) {
+          this.debugLog('[SUBSCRIBE] Subscribed to topic', granted[0].topic);
+        }
       }
-      const message = messageBufer?.toString();
-      this.debugLog('[RESPONSE] Received response', topic, message);
-      if (topic.endsWith('/status')) {
-        const payload = safeJson<R>(message);
-        callback && callback(payload as R, topic);
-      } else if (topic.endsWith('/error')) {
-        const error = safeJson<ErrorResponse>(message?.toString());
-        errorCallback && errorCallback(error as ErrorResponse, topic);
-      }
-    };
-
-    this.client.on('message', messageHandler);
+    });
   }
 
   /**
@@ -148,16 +170,7 @@ export class KaaMqttClient {
   ): void {
     const topic = `kp1/${this.appVersionName}/epmx/${this.token}/get/keys/${requestId}`;
     this.debugLog('[METADATA] Getting all metadata keys', topic);
-    this.subscribeToResponseTopics(
-      topic,
-      callback
-        ? (message, topic) => {
-            const keys = safeJson<string[]>(message) || [];
-            callback(keys, topic);
-          }
-        : undefined,
-      errorCallback,
-    );
+    this.subscribeToResponseTopics(topic, callback, errorCallback);
     this.client.publish(topic, '');
   }
 
@@ -175,19 +188,8 @@ export class KaaMqttClient {
   ): void {
     const topic = `kp1/${this.appVersionName}/epmx/${this.token}/get/${requestId}`;
     this.debugLog('[METADATA] Getting metadata', topic);
+    this.subscribeToResponseTopics(topic, callback, errorCallback);
     this.client.publish(topic, '');
-    this.subscribeToResponseTopics(
-      topic,
-      callback
-        ? (message, topic) => {
-            const metadata = safeJson<Record<string, any>>(message);
-            if (metadata) {
-              callback(metadata, topic);
-            }
-          }
-        : undefined,
-      errorCallback,
-    );
   }
 
   /**
@@ -205,9 +207,9 @@ export class KaaMqttClient {
     requestId?: string,
   ): void {
     const topic = `kp1/${this.appVersionName}/epmx/${this.token}/update${requestId ? `/${requestId}` : ''}`;
-    this.client.publish(topic, JSON.stringify(payload));
     this.debugLog('[METADATA] Publish full metadata update', topic, payload);
     this.subscribeToResponseTopics(topic, callback, errorCallback);
+    this.client.publish(topic, JSON.stringify(payload));
   }
 
   /**
@@ -226,10 +228,8 @@ export class KaaMqttClient {
   ): void {
     const topic = `kp1/${this.appVersionName}/epmx/${this.token}/update/keys${requestId ? `/${requestId}` : ''}`;
     this.debugLog('[METADATA] Publish metadata keys update', topic, metadata);
+    this.subscribeToResponseTopics(topic, callback, errorCallback);
     this.client.publish(topic, JSON.stringify(metadata));
-    if (requestId && callback && errorCallback) {
-      this.subscribeToResponseTopics(topic, callback, errorCallback);
-    }
   }
 
   /**
@@ -247,8 +247,8 @@ export class KaaMqttClient {
     requestId?: string,
   ): void {
     const topic = `kp1/${this.appVersionName}/epmx/${this.token}/delete/keys${requestId ? `/${requestId}` : ''}`;
-    this.client.publish(topic, JSON.stringify(keys));
     this.subscribeToResponseTopics(topic, callback, errorCallback);
+    this.client.publish(topic, JSON.stringify(keys));
   }
 
   /**
@@ -306,8 +306,8 @@ export class KaaMqttClient {
   ): void {
     const topic = `kp1/${this.appVersionName}/cex/${this.token}/result/${commandType}${requestId ? `/${requestId}` : ''}`;
     const payload = JSON.stringify(results);
+    this.subscribeToResponseTopics(topic, undefined, errorCallback);
     this.client.publish(topic, payload);
-    this.subscribeToResponseTopics(topic, () => {}, errorCallback);
   }
 
   public getConfigurationJson(
@@ -354,13 +354,13 @@ export class KaaMqttClient {
     errorCallback?: ErrorCallback,
   ) {
     const topic = `kp1/${this.appVersionName}/cmx_ota/${this.token}/applied/json`;
-    this.client.publish(topic, JSON.stringify(payload));
     this.debugLog(
       '[SOFTWARE] Reporting current software version',
       topic,
       payload,
     );
     this.subscribeToResponseTopics(topic, callback, errorCallback);
+    this.client.publish(topic, JSON.stringify(payload));
   }
 
   public getSoftwareUpdate(
@@ -369,13 +369,29 @@ export class KaaMqttClient {
     requestId?: string,
   ): void {
     const topic = `kp1/${this.appVersionName}/cmx_ota/${this.token}/config/json${requestId ? `/${requestId}` : ''}`;
-    this.client.publish(topic, JSON.stringify({}));
     this.debugLog('[SOFTWARE] Getting software version', topic);
     this.subscribeToResponseTopics(topic, callback, errorCallback);
+    this.client.publish(topic, JSON.stringify({}));
   }
 
+  /**
+   * Safely unsubscribe from all subscriptions and clear the subscriptions record.
+   */
   public disconnect(callback?: mqtt.DoneCallback) {
-    this.client.end(callback);
+    const topics = Object.keys(this.subscriptions);
+    if (topics.length === 0) {
+      this.client.end(callback);
+      return;
+    }
+    this.client.unsubscribe(topics, (err) => {
+      if (err) {
+        this.debugLog('[DESTROY] Error unsubscribing from topics', err);
+      } else {
+        this.debugLog('[DESTROY] Successfully unsubscribed from all topics');
+      }
+      this.subscriptions = {};
+      this.client.end(callback);
+    });
   }
 
   public connect() {
